@@ -4,7 +4,17 @@ import Data.Char
 import Control.Applicative
 
 main :: IO ()
-main = undefined
+main = do
+  putStrLn "Enter valid Json"
+  input <- getLine
+  let result = parse input
+  case result of
+    Just x -> print x
+    Nothing -> print "Not valid Json"
+  main
+
+parse :: String -> Maybe (String, JsonValue)
+parse input = runParser jsonValue $ input
 
 type JsonMap = [(String, JsonValue)]
 

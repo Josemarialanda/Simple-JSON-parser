@@ -2,12 +2,12 @@ name:                jsonParser
 version:             0.1.0.0
 -- synopsis:
 -- description:
-homepage:            https://github.com/githubuser/jsonParser#readme
+homepage:            https://github.com/Josemarialanda/Simple-JSON-parser
 license:             BSD3
 license-file:        LICENSE
-author:              Author name here
-maintainer:          example@example.com
-copyright:           2020 Author name here
+author:              José María Landa Chávez
+maintainer:          josemaria.landa@gmail.com
+copyright:           2020 José María Landa Chávez
 category:            Web
 build-type:          Simple
 cabal-version:       >=1.10
