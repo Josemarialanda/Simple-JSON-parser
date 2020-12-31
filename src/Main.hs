@@ -3,74 +3,31 @@ module Main where
 import Data.Char
 import Control.Applicative
 
-clear = putStrLn "\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n"
-
 main :: IO ()
 main = undefined
 
--- We define a map datatype to store a String and a JsonValue
 type JsonMap = [(String, JsonValue)]
 
--- We define our language grammar
 data JsonValue = JsonNull 
                | JsonBool Bool
-               | JsonNumber Integer -- NOTE: No support for floats 
+               | JsonNumber Integer 
                | JsonString String
                | JsonArray [JsonValue]
                | JsonObject JsonMap
                deriving (Show, Eq)
 
--- NOTE: No proper error reporting (Could implement Either instead of Maybe)
 newtype Parser a = Parser { runParser :: String -> Maybe (String, a) }
 
--- Parser :: (String -> Maybe (String, a)) -> Parser a
--- That is, a Parser is a function that takes in a String and maybe returns a tuple of a String and a parsed element
--- Example (A parser of characters (first element)):
--- parser 'n' :: String -> Maybe (String, a :: Char))
--- parser 'n' $ "nice" = ("ice",'n') -> since 
-
--- The following is such a function
--- It take a character and returns a parser that parses said character from a stream of characters
 charP :: Char -> Parser Char
 charP x = Parser f
   where  f (y:ys) = if y == x then Just (ys,x) else Nothing
          f [] = Nothing
 
--- If we want to access the value wrapped within the Parser datatype we need to implement functor
 instance Functor Parser where
-  fmap f (Parser p) = Parser $ \input -> do -- f :: a -> b    e.g ord :: Char -> Int
-    (input', x  ) <- p input -- Note we're not actually modifying the input, input' is just a promise that our parser will take in a string and return a Maybe (String, x),
-    return $ (input', f x)   -- that is, p is already a parser that takes in a string and returns Maybe (String, x)
-                             -- but instead of just returning x, we will return f(x)
-{-
-Example:
-
-parser :: Parser Char   is a parser that parses characters
-parser = charP 'n'
-
-parser :: Parser Int    is now a parser that parses Ints
-parser' = ord <$> parser 
-
-<--<--<--<--<--<--<--<-->-->-->-->-->-->-->-->
-
-charParse :: String -> Maybe (String, Char)
-charParse = runParser parser
-
-charParse "nice" = Just ("ice",'n')
-
-<--<--<--<--<--<--<--<-->-->-->-->-->-->-->-->
-
-intParse :: String -> Maybe (String, Int)
-intParse = runParser parser'
-
-charParse "nice" = Just ("ice",110)    ord 'n' == 110
--}
-
--- Now we want to chain parsers
--- i.e if we want to do the following: 
--- input -> parser1 -> parser2 -> ... -> parsedString
--- We con implement this functionality with the applicative instance
-
+  fmap f (Parser p) = Parser $ \input -> do 
+    (input', x  ) <- p input 
+    return $ (input', f x)   
+                             
 instance Applicative Parser where
   pure x = Parser $ \input -> return (input, x)
   (Parser p1) <*> (Parser p2) = Parser $ \input -> do
@@ -78,131 +35,16 @@ instance Applicative Parser where
     (input'', a) <- p2 input'
     return $ (input'', f a)
 
-{-
-The first parser p1 returns a function f and the next string input -> input'
-
-i.e (input', f) <- p1 input,
-
-then we take input' and feed it into parser p2 which returns input'' and a
-parsed item 'a'.
-
-Finally we return input'' and f(a). i.e -> return $ (input'', f a)
-
-This is precisely the chaining functionality we are looking for.
-
--}
-
--- We can now parse Strings sequencing char parsers
--- Example:
-{-
-Recall that "string" = ['s','t','r','i','n','g'],
-therefore we can do the following: map charP "string" and this yields a new
-list of char parsers:
-
-parsers = map charP ['s','t','r','i','n','g'] = 
-  [charP 's',charP 't',charP 'r',charP 'i',charP 'n',charP 'g'] =
-:t = parsers :: [Parser Char]
-
-However we want a parser of Strings, that is Parser [Char] = Parser String,
-i.e we want to somehow invert our list of char parsers into a parser of a list of chars,
-or a parser of strings.
-
-This way we would have a parser that is capable of parsing an entire string and
-not just a single character.
-
-
-Note the type of sequenceA
-:t sequenceA :: (Traversable t, Applicative f) => t (f a) -> f (t a)
-
-lists are traversable and our parsers are applicatives! Thus, we are able to implement
-this method and get out parser of strings.
--}
-
-pipe :: [a -> b] -> a -> [b]
-pipe fs x =
-    case fs of
-      f:[] -> [f x]
-      f:fs' -> f x : pipe fs' x
-
 stringP :: String -> Parser String
 stringP = sequenceA . map charP
 
--- YAY!!!
-
-{-
-we can now do the following:
-
-> parser = stringP "hello"
-> parse = runParser parser
-> parse "hello" == Just ("","hello")
-
-SUCCESS
--}
-
--- We are now ready to parse JsonValues
-
--- Ignore whetever input we receive and replace with JsonNull
--- (\_ -> JsonNull) <$> Parser $ \input -> (input', a)
--- ==  Parser $ \input -> (input', JsonNull)
 jsonNull :: Parser JsonValue
 jsonNull = (\_ -> JsonNull) <$> stringP "null"
-
--- Since we now need parse not only one, but two sequences of characters,
--- we must first try to parse true and if that fails try and parse false,
--- if that also fails, we return Nothing
--- i.e we want to combine two parsers into a single parser that tries
--- for "true" and "false" in sequence and picks the one that is
--- successful.
-
-{-
-We can use the Alternative (in Control.Applicative module) type class to acheive this:
-
-class Applicative f => Alternative (f :: * -> *) where
-  empty :: f a
-  (<|>) :: f a -> f a -> f a
-  some :: f a -> f [a]
-  many :: f a -> f [a]
-  {-# MINIMAL empty, (<|>) #-}
-        -- Defined in `GHC.Base'
-
-Our parser is already applicative, thus we need only implement the
-alternative interface.
--}
 
 instance Alternative Parser where
   empty = Parser $ \_ -> Nothing
   (Parser p1) <|> (Parser p2) = Parser $ \input -> 
-    p1 input <|> p2 input -- We can take advantage of the fact that
-                          -- Maybe is already an instance of Alternative
-
-{-
-some is one or more, many is 0 or more results collected from performing the
-same computation over and over by the familiar maximal munch rule. For this to
-make sense, some state passing (and alteration) must take place reducing the domain
-of possibilities somehow, otherwise it will repeat ad infinitum. And state passing
-and parsing are closely related.
-
-
-some and many can be defined as:
-
-
-some f = (:) <$> f <*> many f
-many f = some f <|> pure []
-
-Perhaps it helps to see how some would be written with monadic do syntax:
-
-
-some f = do
-  x <- f
-  xs <- many f
-  return (x:xs)
-
-So some f runs f once, then "many" times, and conses the results. many f runs f "some" times,
-or "alternatively" just returns the empty list. The idea is that they both run f as often as
-possible until it "fails", collecting the results in a list. The difference is that some
-f fails if f fails immediately, while many f will succeed and "return" the empty list.
-  But what this all means exactly depends on how <|> is defined.
--}
+    p1 input <|> p2 input 
 
 jsonBool :: Parser JsonValue
 jsonBool = f <$> (stringP "true" <|> stringP "false")
@@ -215,8 +57,6 @@ spanP f = Parser $ \input ->
   let (token, rest) = span f input
     in return $ (rest, token) 
 
--- Parser combinator that parses a list of items and return the same parser
--- only if the initial parser is not null (not empty), otherwise it fails.
 notNull :: Parser String -> Parser String
 notNull (Parser p) = Parser $ \input -> do
   (input', xs) <- p input
@@ -227,63 +67,15 @@ jsonNumber :: Parser JsonValue
 jsonNumber = f <$> notNull (spanP isDigit)
   where f digits = JsonNumber $ read digits
 
-{-
-In order to parse an entire string we need to check when a string starts
-and when a string ends.
-
-A string starts with " and ends with another ". Everything in between is our
-desired string literal
--}
-
 stringLiteral :: Parser String
-stringLiteral = (charP '"' *> spanP (/= '"') <* charP '"') -- Everthing that is not "
-
-{-
-in order to parse an entire string and ignore the " at the begninning
-and at the end of a string we need to first parse these and discard them,
-leaving us with only the string literal Parser.
-
-This can be acheived with *> and <* which are methods in applicative:
-
-(<*) :: Applicative f => f a -> f b -> f a
-(*>) :: Applicative f => f a -> f b -> f b
-
-These function chain parsers but discard the result of the parsers (left and right)
--}
+stringLiteral = (charP '"' *> spanP (/= '"') <* charP '"')
 
 jsonString :: Parser JsonValue
 jsonString = JsonString <$> stringLiteral
 
--- runParser jsonString "\"hello\"" == Just ("","hello")
-
-{-
-This works fine, but what if we want to parse the following string "nullnullnullnull",
-well, we get:
-
-runParser jsonNull "nullnullnullnull" == Just ("nullnullnull",JsonNull)
-
-It ignores every null after the first null. We want to continue parsing until the parser fails.
-How do we do this?
-
-There is a function defined in the Alternative type class called many:
-
-many :: Alternative f => f a -> f [a]
-
-this function takes an alternative f (Parser a) and returns a Parser [a].
-
-runParser (many jsonNull) "nullnullnullnull" == Just ("",[JsonNull,JsonNull,JsonNull,JsonNull])
-
-many goes on until (it repeatedly applies the parser) it reaches an empty element (empty = Parser $ \_ -> Nothing)
--}
-
--- whitespaces parses a series of whitespaces and returns (rest, spaces)
 whitespaces :: Parser String
 whitespaces = spanP isSpace
 
--- takes a separator and a parser of what we want to parse (any type of JsonValue) and returns a parser of lists of elements
--- Parser  a parses separator elements
--- Parser b parses content
--- sepBy combines them in the following manner:
 sepBy :: Parser a -> Parser b -> Parser [b]
 sepBy sep element = (fmap (:) element) <*> many (sep *> element) <|> pure []
 
@@ -299,6 +91,5 @@ jsonObject = JsonObject <$> (charP '{' *> whitespaces *> object <* whitespaces <
                            <*> (whitespaces *> charP ':' *> whitespaces) 
                            <*> jsonValue
 
--- Parser combinator of different JsonValue parsers
 jsonValue :: Parser JsonValue
 jsonValue = jsonNull <|> jsonBool <|> jsonNumber <|> jsonString <|> jsonArray <|> jsonObject
