@@ -118,6 +118,12 @@ lists are traversable and our parsers are applicatives! Thus, we are able to imp
 this method and get out parser of strings.
 -}
 
+pipe :: [a -> b] -> a -> [b]
+pipe fs x =
+    case fs of
+      f:[] -> [f x]
+      f:fs' -> f x : pipe fs' x
+
 stringP :: String -> Parser String
 stringP = sequenceA . map charP
 
@@ -168,8 +174,35 @@ instance Alternative Parser where
   (Parser p1) <|> (Parser p2) = Parser $ \input -> 
     p1 input <|> p2 input -- We can take advantage of the fact that
                           -- Maybe is already an instance of Alternative
-  some = undefined        
-  many = undefined
+
+{-
+some is one or more, many is 0 or more results collected from performing the
+same computation over and over by the familiar maximal munch rule. For this to
+make sense, some state passing (and alteration) must take place reducing the domain
+of possibilities somehow, otherwise it will repeat ad infinitum. And state passing
+and parsing are closely related.
+
+
+some and many can be defined as:
+
+
+some f = (:) <$> f <*> many f
+many f = some f <|> pure []
+
+Perhaps it helps to see how some would be written with monadic do syntax:
+
+
+some f = do
+  x <- f
+  xs <- many f
+  return (x:xs)
+
+So some f runs f once, then "many" times, and conses the results. many f runs f "some" times,
+or "alternatively" just returns the empty list. The idea is that they both run f as often as
+possible until it "fails", collecting the results in a list. The difference is that some
+f fails if f fails immediately, while many f will succeed and "return" the empty list.
+  But what this all means exactly depends on how <|> is defined.
+-}
 
 jsonBool :: Parser JsonValue
 jsonBool = f <$> (stringP "true" <|> stringP "false")
@@ -193,3 +226,79 @@ notNull (Parser p) = Parser $ \input -> do
 jsonNumber :: Parser JsonValue
 jsonNumber = f <$> notNull (spanP isDigit)
   where f digits = JsonNumber $ read digits
+
+{-
+In order to parse an entire string we need to check when a string starts
+and when a string ends.
+
+A string starts with " and ends with another ". Everything in between is our
+desired string literal
+-}
+
+stringLiteral :: Parser String
+stringLiteral = (charP '"' *> spanP (/= '"') <* charP '"') -- Everthing that is not "
+
+{-
+in order to parse an entire string and ignore the " at the begninning
+and at the end of a string we need to first parse these and discard them,
+leaving us with only the string literal Parser.
+
+This can be acheived with *> and <* which are methods in applicative:
+
+(<*) :: Applicative f => f a -> f b -> f a
+(*>) :: Applicative f => f a -> f b -> f b
+
+These function chain parsers but discard the result of the parsers (left and right)
+-}
+
+jsonString :: Parser JsonValue
+jsonString = JsonString <$> stringLiteral
+
+-- runParser jsonString "\"hello\"" == Just ("","hello")
+
+{-
+This works fine, but what if we want to parse the following string "nullnullnullnull",
+well, we get:
+
+runParser jsonNull "nullnullnullnull" == Just ("nullnullnull",JsonNull)
+
+It ignores every null after the first null. We want to continue parsing until the parser fails.
+How do we do this?
+
+There is a function defined in the Alternative type class called many:
+
+many :: Alternative f => f a -> f [a]
+
+this function takes an alternative f (Parser a) and returns a Parser [a].
+
+runParser (many jsonNull) "nullnullnullnull" == Just ("",[JsonNull,JsonNull,JsonNull,JsonNull])
+
+many goes on until (it repeatedly applies the parser) it reaches an empty element (empty = Parser $ \_ -> Nothing)
+-}
+
+-- whitespaces parses a series of whitespaces and returns (rest, spaces)
+whitespaces :: Parser String
+whitespaces = spanP isSpace
+
+-- takes a separator and a parser of what we want to parse (any type of JsonValue) and returns a parser of lists of elements
+-- Parser  a parses separator elements
+-- Parser b parses content
+-- sepBy combines them in the following manner:
+sepBy :: Parser a -> Parser b -> Parser [b]
+sepBy sep element = (fmap (:) element) <*> many (sep *> element) <|> pure []
+
+jsonArray :: Parser JsonValue
+jsonArray =  JsonArray <$> (charP '[' *> whitespaces *> elements <* whitespaces <* charP ']')
+  where
+    elements = sepBy (whitespaces *> charP ',' <* whitespaces) jsonValue 
+
+jsonObject :: Parser JsonValue
+jsonObject = JsonObject <$> (charP '{' *> whitespaces *> object <* whitespaces <* charP '}')
+  where object = sepBy (whitespaces *> charP ',' <* whitespaces) pair
+        pair = (\key _ value -> (key,value)) <$> stringLiteral 
+                           <*> (whitespaces *> charP ':' *> whitespaces) 
+                           <*> jsonValue
+
+-- Parser combinator of different JsonValue parsers
+jsonValue :: Parser JsonValue
+jsonValue = jsonNull <|> jsonBool <|> jsonNumber <|> jsonString <|> jsonArray <|> jsonObject
